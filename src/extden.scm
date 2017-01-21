@@ -29,9 +29,27 @@
   (req
    cont))
 
-;; Requesting to terminate with an error:
-(define-class <error> (<request>)
-  (err-msg))
+;;;; Computations Are Monads ---------------------------------------------------
+
+(define (pure v)
+  (make <pure> 'val v))
+
+(define-generic (bind comp f))
+
+(define-method (bind (comp <pure>) f)
+  (f (pure-val comp)))
+
+(define-method (bind (comp <effect>) f)
+  (make <effect> 'req (slot-value comp 'req)
+                 'cont (lambda (v) (bind ((slot-value comp 'cont) v) f))))
+
+;; Lispy do-notation:
+(define-syntax mlet
+  (syntax-rules ()
+    ((_ () body ...)
+     (begin body ...))
+    ((_ ((name expr) bindings ...) body ...)
+     (bind expr (lambda (name) (mlet (bindings ...) body ...))))))
 
 ;;;; Interpretation Interface --------------------------------------------------
 
@@ -61,31 +79,24 @@
 (define-method (run (comp <effect>))
   (error "unhandled effect" comp))
 
-;;;; Computations Are Monads ---------------------------------------------------
-
-(define (pure v)
-  (make <pure> 'val v))
-
-(define-generic (bind comp f))
-
-(define-method (bind (comp <pure>) f)
-  (f (pure-val comp)))
-
-(define-method (bind (comp <effect>) f)
-  (make <effect> 'req (slot-value comp 'req)
-                 'cont (lambda (v) (bind ((slot-value comp 'cont) v) f))))
-
 ;;;; Base Language (Error Handling) --------------------------------------------
 
 ;; An error literal (not very useful):
 (define-class <err> (<expr>))
 
+;; Requesting to terminate with an error:
+(define-class <error> (<request>)
+  (err-msg))
+
+(define (err-eff msg)
+  (make <effect> 'req (make <error> 'err-msg msg)
+                 'cont pure))
+
 ;; Handles errors:
 (define-class <exc> (<resource>))
 
 (define-method (interpret (ctrl <err>))
-  (make <effect> 'req (make <error> 'err-msg "explicit error")
-                 'cont pure))
+  (err-eff "explicit error"))
 
 (define-method (handle* (req <error>) (cont #t) (res <exc>))
   (error "fatal error" (slot-value req 'err-msg)))
@@ -109,11 +120,11 @@
 
 (define-method (interpret (ctrl <add1>))
   (bind (interpret (slot-value ctrl 'expr))
-        (lambda (n) (pure (add1 n)))))
+        (o pure add1)))
 
 (define-method (interpret (ctrl <sub1>))
   (bind (interpret (slot-value ctrl 'expr))
-        (lambda (n) (pure (sub1 n)))))
+        (o pure sub1)))
 
 ;;;; Call-by-Value Lambda Calculus ---------------------------------------------
 
@@ -148,6 +159,15 @@
 (define-class <env> (<resource>)
   (bindings))
 
+(define (env-ref env name)
+  (let ((binding (assoc name (slot-value env 'bindings))))
+    (and binding (cdr binding))))
+
+;; FIXME: need to copy unrelated slots to from env to result instance:
+(define (env-extend env name value)
+  (make (class-of env)
+    'bindings (cons (cons name value) (slot-value env 'bindings))))
+
 (define-method (interpret (ctrl <var>))
   (make <effect> 'req (make <deref> 'name (slot-value ctrl 'name))
                  'cont pure))
@@ -158,14 +178,11 @@
                  'cont pure))
 
 (define-method (interpret (ctrl <app>))
-  (bind (interpret (slot-value ctrl 'op))
-        (lambda (f)
-          (bind (interpret (slot-value ctrl 'arg))
-                (lambda (a)
-                  (if (equal? (class-of f) <closure>)
-                    ((slot-value f 'f) a)
-                    (make <effect> 'req (make <error> 'err-msg "not a closure")
-                                   'cont pure)))))))
+  (mlet ((f (interpret (slot-value ctrl 'op)))
+         (a (interpret (slot-value ctrl 'arg))))
+    (if (equal? (class-of f) <closure>)
+      ((slot-value f 'f) a)
+      (err-eff "not a closure"))))
 
 (define-method (handle* (req <close>) (cont #t) (res <env>))
   (let* ((formal (slot-value req 'formal))
@@ -174,16 +191,13 @@
     (values
       (handle (cont (make <closure>
                       'f (lambda (a)
-                           (let ((env*
-                                  (make (class-of res)
-                                    'bindings (cons (cons formal a) bindings))))
-                             (handle (interpret body) env*)))))
+                            (handle (interpret body)
+                                    (env-extend res formal a)))))
               res)
       res)))
 
 (define-method (handle* (req <deref>) (cont #t) (res <env>))
-  (let ((binding (assoc (slot-value req 'name) (slot-value res 'bindings))))
-    (if binding
-      (handle (cont (cdr binding)) res)
-      (make <effect> 'req (make <error> 'err-msg "unbound")
-                     'cont pure))))
+  (let ((value (env-ref res (slot-value req 'name))))
+    (if value
+      (handle (cont value) res)
+      (err-eff "unbound"))))
