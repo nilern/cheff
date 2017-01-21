@@ -13,7 +13,7 @@
 (define-class <comp> ())
 
 ;; Requests to handle:
-(define-class <req-msg> ())
+(define-class <request> ())
 
 ;; Resources that handle requests:
 (define-class <resource> ())
@@ -30,7 +30,7 @@
    cont))
 
 ;; Requesting to terminate with an error:
-(define-class <error> (<req-msg>)
+(define-class <error> (<request>)
   (err-msg))
 
 ;;;; Interpretation Interface --------------------------------------------------
@@ -44,7 +44,7 @@
 (define-generic (handle comp res))
 
 (define-method (handle (comp <pure>) res)
-  (values (pure-val comp) res))
+  (values comp res))
 
 (define-method (handle (comp <effect>) res)
   (handle* (slot-value comp 'req) (slot-value comp 'cont) res))
@@ -52,6 +52,14 @@
 ;; This is used when handle got an <effect> as the comp:
 ;; handle* : <request>, (<value> -> <comp>), <resource> -> <comp>, <resource>
 (define-generic (handle* req cont res))
+
+(define-generic (run comp))
+
+(define-method (run (comp <pure>))
+  (pure-val comp))
+
+(define-method (run (comp <effect>))
+  (error "unhandled effect" comp))
 
 ;;;; Computations Are Monads ---------------------------------------------------
 
@@ -77,7 +85,7 @@
 
 (define-method (interpret (ctrl <err>))
   (make <effect> 'req (make <error> 'err-msg "explicit error")
-                 'cont (lambda (v) (pure v))))
+                 'cont pure))
 
 (define-method (handle* (req <error>) (cont #t) (res <exc>))
   (error "fatal error" (slot-value req 'err-msg)))
@@ -106,3 +114,76 @@
 (define-method (interpret (ctrl <sub1>))
   (bind (interpret (slot-value ctrl 'expr))
         (lambda (n) (pure (sub1 n)))))
+
+;;;; Call-by-Value Lambda Calculus ---------------------------------------------
+
+;; Closure:
+(define-class <closure> (<value>)
+  (f))
+
+;; Variables:
+(define-class <var> (<expr>)
+  (name))
+
+;; Lambda:
+(define-class <lambda> (<expr>)
+  (formal
+   body))
+
+;; Function application:
+(define-class <app> (<expr>)
+  (op
+   arg))
+
+ ;; Create closure:
+ (define-class <close> (<request>)
+   (formal
+    body))
+
+;; Read variable:
+(define-class <deref> (<request>)
+  (name))
+
+;; Handles binding-related requests:
+(define-class <env> (<resource>)
+  (bindings))
+
+(define-method (interpret (ctrl <var>))
+  (make <effect> 'req (make <deref> 'name (slot-value ctrl 'name))
+                 'cont pure))
+
+(define-method (interpret (ctrl <lambda>))
+  (make <effect> 'req (make <close> 'formal (slot-value ctrl 'formal)
+                                    'body (slot-value ctrl 'body))
+                 'cont pure))
+
+(define-method (interpret (ctrl <app>))
+  (bind (interpret (slot-value ctrl 'op))
+        (lambda (f)
+          (bind (interpret (slot-value ctrl 'arg))
+                (lambda (a)
+                  (if (equal? (class-of f) <closure>)
+                    ((slot-value f 'f) a)
+                    (make <effect> 'req (make <error> 'err-msg "not a closure")
+                                   'cont pure)))))))
+
+(define-method (handle* (req <close>) (cont #t) (res <env>))
+  (let* ((formal (slot-value req 'formal))
+         (body (slot-value req 'body))
+         (bindings (slot-value res 'bindings)))
+    (values
+      (handle (cont (make <closure>
+                      'f (lambda (a)
+                           (let ((env*
+                                  (make (class-of res)
+                                    'bindings (cons (cons formal a) bindings))))
+                             (handle (interpret body) env*)))))
+              res)
+      res)))
+
+(define-method (handle* (req <deref>) (cont #t) (res <env>))
+  (let ((binding (assoc (slot-value req 'name) (slot-value res 'bindings))))
+    (if binding
+      (handle (cont (cdr binding)) res)
+      (make <effect> 'req (make <error> 'err-msg "unbound")
+                     'cont pure))))
