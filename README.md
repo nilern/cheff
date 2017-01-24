@@ -23,8 +23,9 @@
 
 ## TODO
 
-- [ ] `finally`
+- [x] `finally`
 - [ ] install several instances as handlers at once
 - [ ] investigate prototypal object model
 - [ ] use something more mainstream than Scheme
-    * Multi-prompt multi-shot delimited continuation are hard to find...
+    * Multi-prompt multi-shot delimited continuation implementations are hard to
+      find...

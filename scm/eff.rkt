@@ -7,8 +7,10 @@
   (syntax-rules ()
     ((_ (name (effect-class initargs ...)) body ...)
      (let ((tag (make-continuation-prompt-tag 'eff-handler)))
-       (parameterize ((name (new effect-class [prompt-tag tag] initargs ...)))
-         (reset-at tag (send (name) pure (begin body ...))))))))
+       (parameterize ((name (new effect-class
+                                 [prompt-tag tag] initargs ...)))
+         (send (name) run
+               (reset-at tag (send (name) pure (begin body ...)))))))))
 
 (define-syntax send!
   (syntax-rules ()
@@ -29,6 +31,9 @@
       -prompt-tag)
     
     (define/public (pure value)
+      value)
+    
+    (define/public (run value)
       value)))
 
 ;;;; Examples ------------------------------------------------------------------
@@ -108,12 +113,56 @@
      (+ 3 (send! e raise 'hell)))
    'none
    "exn:optionalize"))
-    
+
+(define (state)
+  (define state-handler (interface () lookup update!))
+
+  (define r (make-parameter #f))
+
+  (define mstate%
+    (class* eff-handler% (state-handler)
+      (super-new)
+      (init state)
+      (define -state state)
+      (define/public (lookup k)
+        (lambda (s) ((k s) s)))
+      (define/public (update! k s*)
+        (lambda (s) ((k s*) s*)))
+      (define/override (pure v)
+        (lambda (s) v))
+      (define/override (run f)
+        (f -state))))
+
+  (check-equal?
+    (with-effect-handler (r (mstate% [state 3]))
+      (send! r update! (add1 (send! r lookup)))
+      (send! r lookup))
+    4
+    "state:monadic")
+
+  (define istate%
+    (class* eff-handler% (state-handler)
+      (super-new)
+      (init state)
+      (define -state state)
+      ;; actually might as well ditch the continuations and use normal `send`:
+      (define/public (lookup k)
+        (k -state))
+      (define/public (update! k s*)
+        (k (set! -state s*)))))
+
+  (check-equal?
+    (with-effect-handler (r (istate% [state 3]))
+      (send! r update! (add1 (send! r lookup)))
+      (send! r lookup))
+    4
+    "state:field"))
 
 ;;;; Main ----------------------------------------------------------------------
 
 (define (main)
   (choice)
-  (exn))
+  (exn)
+  (state))
 
 (main)
