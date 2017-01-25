@@ -17,8 +17,7 @@
     ((_ eff-obj method args ...)
      (let ((tag (send eff-obj get-prompt-tag)))
        (shift-at tag k
-         (abort-current-continuation tag
-           (lambda () (send eff-obj method k args ...))))))))
+         (send eff-obj method k args ...))))))
 
 (define eff-handler%
   (class object%
@@ -95,16 +94,16 @@
 (test-case "choice"
   (check-equal?
     (with-effect-handler (c (always%))
-      (let ((x (if (send! c decide) 10 20))
-            (y (if (send! c decide) 0 5)))
+      (let* ((x (if (send! c decide) 10 20))
+             (y (if (send! c decide) 0 5)))
         (- x y)))
     10
     "always")
 
   (check-equal?
     (with-effect-handler (c (choose-all%))
-      (let ((x (if (send! c decide) 10 20))
-            (y (if (send! c decide) 0 5)))
+      (let* ((x (if (send! c decide) 10 20))
+             (y (if (send! c decide) 0 5)))
         (- x y)))
     '(10 5 20 15)
     "all")
@@ -112,8 +111,8 @@
   (check-equal?
    (with-effect-handler (c1 (choose-all%))
      (with-effect-handler (c2 (choose-all%))
-       (let ((x (if (send! c1 decide) 10 20))
-             (y (if (send! c2 decide) 0 5)))
+       (let* ((x (if (send! c1 decide) 10 20))
+              (y (if (send! c2 decide) 0 5)))
          (- x y))))
    '((10 5) (20 15))
    "all-all")
@@ -121,8 +120,8 @@
   (check-equal?
    (with-effect-handler (c2 (choose-all%))
      (with-effect-handler (c1 (choose-all%))
-       (let ((y (if (send! c2 decide) 0 5))
-             (x (if (send! c1 decide) 10 20)))
+       (let* ((y (if (send! c2 decide) 0 5))
+              (x (if (send! c1 decide) 10 20)))
          (- x y))))
    '((10 20) (5 15))
    "all-lla"))
@@ -132,7 +131,7 @@
    (with-effect-handler (e (optionalize%))
      (+ 3 (send! e raise 'hell)))
    'none
-   "exn:optionalize"))
+   "optionalize"))
 
 (test-case "state"
   (check-equal?
@@ -140,11 +139,11 @@
       (send! r update! (add1 (send! r lookup)))
       (send! r lookup))
     4
-    "state:monadic")
+    "monadic")
 
   (check-equal?
     (with-effect-handler (r (istate% [state 3]))
       (send! r update! (add1 (send! r lookup)))
       (send! r lookup))
     4
-    "state:field"))
+    "field"))
